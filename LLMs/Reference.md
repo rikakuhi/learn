@@ -288,7 +288,16 @@ https://zhuanlan.zhihu.com/p/628438318
 - transformer中最初始的做法。
 ### 2.MQA(multi query attention)
 - 与MHA不同的是，MQA 让所有的头之间共享同一份 Key 和 Value 矩阵，每个头分别单独保留了一份 Query 参数，从而大大减少 Key 和 Value 矩阵的参数量。因此在构建Linear的时候，维度应该是 所有query的维度 + 一个head的key维度 + 一个head的value维度。
+- 由于多个head共用相同的key和value，这使得占用内存更少，同时访问效率更高，尽管会通过广播机制变成和MHA的维度相同，但是广播机制十分高效，并行性更强。
+- 共用一个Q原理上不可行，因为MHA的设计初衷是让不同的head能够关注不同的方面，如果共用同一个Q，那多head的设计其实也就没啥用了，会影响模型捕获多样性信息的能力。
+- 原论文中比较了MQA和MHA之间的精度，MQA相对于MHA几乎没有精度损失，甚至在某些方面甚至比MHA精度更高。
 ### 3.GQA(group query attention)
+- 相当于MQA的升级版，是在MQA的基础上，将multi head进行分组，每组共用一个query。
+
+### 4.关于MQA和GQA为什么可以在某些方面超过MHA
+- 论文中说MHA中的多个K、V可能存在大量信息冗余。
+- 减少了参数量，这可能有助于避免过拟合，提升在其他数据上的泛化能力。
+- 共享参数使得多个head之间更容易协调一致，减少了训练过程中头部之间不一致导致的噪声，有助于训练出更稳定的模型。
 
 三种attention代码如下：
 ```python
