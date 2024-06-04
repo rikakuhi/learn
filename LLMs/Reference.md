@@ -1,8 +1,10 @@
 # 01. 大模型常用微调方法LORA和Ptuning的原理
-
+LoRA这种微调的方法称为PEFT（参数高效微调）
 Lora方法的核心是在大型语言模型上对指定参数增加额外的低秩矩阵，也就是在原始PLM旁边增加一个旁路，做一个降维再升维的操作。并在模型训练过程中，固定PLM的参数，只训练降维矩阵A与升维矩阵B。
 
 Ptuning方法的核心是使用可微的virtual token替换了原来的discrete tokens，且仅加入到输入层，并使用prompt encoder（BiLSTM+MLP）对virtual token进行编码学习。
+
+LoRA有两个主要参数，其中一个是r即矩阵降维降到的维度，另外一个是阿尔法，这个参数是对添加的旁路的梯度进行一个scale，其作用是当r维度变化的时候，梯度会发生变化，导致可能需要重新调整学习率，通过调整阿尔法就可以使得梯度变化保持同一个尺度，从而不用调整学习率。
 
 更详细请查阅[使用 LoRA（低阶适应）微调 LLM](https://zhuanlan.zhihu.com/p/672999750)
 
@@ -282,8 +284,149 @@ https://zhuanlan.zhihu.com/p/628438318
 - LLAMA：采用了Pre-Layer Normalization（前标准化）的结构，即先进行Layer Normalization，然后进行自注意力或前馈神经网络的计算。这种结构有助于提高模型的泛化能力和鲁棒性。
 
 # 41. MHA多头注意力和MQA多查询注意力的区别？
+### 1.MHA(multi head attention)
+- transformer中最初始的做法。
+### 2.MQA(multi query attention)
+- 与MHA不同的是，MQA 让所有的头之间共享同一份 Key 和 Value 矩阵，每个头分别单独保留了一份 Query 参数，从而大大减少 Key 和 Value 矩阵的参数量。因此在构建Linear的时候，维度应该是 所有query的维度 + 一个head的key维度 + 一个head的value维度。
+### 3.GQA(group query attention)
 
-- 与MHA不同的是，MQA 让所有的头之间共享同一份 Key 和 Value 矩阵，每个头只单独保留了一份 Query 参数，从而大大减少 Key 和 Value 矩阵的参数量。
+三种attention代码如下：
+```python
+# 为了方便阅读，我们只保留了 llm-foundry 中关键部分的代码，完整代码请参照源码。
+def scaled_multihead_dot_product_attention(
+        query,
+        key,
+        value,
+        n_heads,
+        multiquery=False,
+    ):
+    q = rearrange(query, 'b s (h d) -> b h s d', h=n_heads)         # (1, 512, 768) -> (1, 8, 512, 96)
+    kv_n_heads = 1 if multiquery else n_heads
+    k = rearrange(key, 'b s (h d) -> b h d s', h=kv_n_heads)        # (1, 512, 768) -> (1, 8, 96, 512) if not multiquery 
+                                                                    # (1, 512, 96) -> (1, 1, 96, 512)  if multiquery
+    v = rearrange(value, 'b s (h d) -> b h s d', h=kv_n_heads)      # (1, 512, 768) -> (1, 8, 512, 96) if not multiquery 
+                                                                    # (1, 512, 96) -> (1, 1, 512, 96)  if multiquery
+    
+    attn_weight = q.matmul(k) * softmax_scale                       # (1, 8, 512, 512)
+    attn_weight = torch.softmax(attn_weight, dim=-1)                # (1, 8, 512, 512)
+
+    out = attn_weight.matmul(v)                                     # (1, 8, 512, 512) * (1, 1, 512, 96) = (1, 8, 512, 96)
+    out = rearrange(out, 'b h s d -> b s (h d)')                    # (1, 512, 768)
+
+    return out, attn_weight, past_key_value
+
+
+class MultiheadAttention(nn.Module):
+
+    def __init__(
+            self,
+            d_model: int,
+            n_heads: int,
+            device: str
+        ):
+        """
+        Multi Head init func.
+
+        Args:
+            d_model (int): hidden state size, e.g. 768
+            n_heads (int): 设定的注意力头数, e.g. 8
+            device (str): _description_
+        """
+        super().__init__()
+
+        self.d_model = d_model
+        self.n_heads = n_heads
+    
+        self.Wqkv = nn.Linear(                       # 【关键】Multi-Head Attention 的创建方法
+            self.d_model, 
+            3 * self.d_model,                        # 有 query, key, value 3 个矩阵, 所以是 3 * d_model
+            device=device
+        )                                            # (d_model, 3 * d_model)
+        self.attn_fn = scaled_multihead_dot_product_attention
+        self.out_proj = nn.Linear(
+            self.d_model, 
+            self.d_model, 
+            device=device
+        )
+
+    def forward(self, x):
+        """
+        forward func.
+
+        Args:
+            x (tensor): (batch, hidden_state, d_model) e.g. -> (1, 768, 512)
+
+        Returns:
+            _type_: _description_
+        """
+        qkv = self.Wqkv(x)                            # (1, 768, 3 * 768)
+
+        query, key, value = qkv.chunk(                # 【关键】每个 tensor 都是 (1, 512, 768)
+            3, 
+            dim=2
+        )     
+
+        context, attn_weights, past_key_value = self.attn_fn(
+            query,
+            key,
+            value,
+            self.n_heads
+        )                                             # (1, 512, 768)
+
+        return self.out_proj(context), attn_weights, past_key_value
+
+
+class MultiQueryAttention(nn.Module):
+    """Multi-Query self attention.
+
+    Using torch or triton attention implemetation enables user to also use
+    additive bias.
+    """
+
+    def __init__(
+        self,
+        d_model: int,
+        n_heads: int,
+        device: Optional[str] = None,
+    ):
+        super().__init__()
+
+        self.d_model = d_model
+        self.n_heads = n_heads
+        self.head_dim = d_model // n_heads
+
+        self.Wqkv = nn.Linear(                           # 【关键】Multi-Query Attention 的创建方法
+            self.d_model,
+            self.d_model + 2 * self.head_dim,                 # 只创建 query 的 head 向量，所以只有 1 个 d_model
+            device=device,                               # 而 key 和 value 则只共享各自的一个 head_dim 的向量
+        )
+
+        self.attn_fn = scaled_multihead_dot_product_attention
+        self.out_proj = nn.Linear(
+            self.d_model, 
+            self.d_model, 
+            device=device
+        )
+        self.out_proj._is_residual = True  # type: ignore
+
+    def forward(self, x,):
+        qkv = self.Wqkv(x)                                           # (1, 512, 960)
+
+        query, key, value = qkv.split(                               # query -> (1, 512, 768)
+            [self.d_model, self.head_dim, self.head_dim],            # key   -> (1, 512, 96)
+            dim=2                                                    # value -> (1, 512, 96)
+        )
+
+        context, attn_weights, past_key_value = self.attn_fn(
+            query,
+            key,
+            value,
+            self.n_heads,
+            multiquery=True,
+        )
+
+        return self.out_proj(context), attn_weights, past_key_value
+  ```
 
 # 42. 推理优化技术 Flash Attention 的作用是什么？
 
