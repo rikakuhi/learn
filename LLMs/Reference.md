@@ -294,6 +294,7 @@ https://zhuanlan.zhihu.com/p/628438318
 - 但是应该综合精度相对于MHA会降低，如果比MHA还要高，那么GQA可能就没啥用了。
 ### 3.GQA(group query attention)
 - 相当于对MQA的改进，MQA将所有的head共用同一个k和v，这样的做法有些激进，因此假如有8个head，GQA的做法是每两个head共用一组K、V。
+- GQA在实现过程中，可以任意调节gropu的数量。
 
 ### 4.关于MQA和GQA为什么可以在某些方面超过MHA
 - 论文中说MHA中的多个K、V可能存在大量信息冗余。
