@@ -291,8 +291,9 @@ https://zhuanlan.zhihu.com/p/628438318
 - 由于多个head共用相同的key和value，这使得占用内存更少，同时访问效率更高，尽管会通过广播机制变成和MHA的维度相同，但是广播机制十分高效，并行性更强。
 - 共用一个Q原理上不可行，因为MHA的设计初衷是让不同的head能够关注不同的方面，如果共用同一个Q，那多head的设计其实也就没啥用了，会影响模型捕获多样性信息的能力。
 - 原论文中比较了MQA和MHA之间的精度，MQA相对于MHA几乎没有精度损失，甚至在某些方面甚至比MHA精度更高。
+- 但是应该综合精度相对于MHA会降低，如果比MHA还要高，那么GQA可能就没啥用了。
 ### 3.GQA(group query attention)
-- 相当于MQA的升级版，是在MQA的基础上，将multi head进行分组，每组共用一个query。
+- 相当于对MQA的改进，MQA将所有的head共用同一个k和v，这样的做法有些激进，因此假如有8个head，GQA的做法是每两个head共用一组K、V。
 
 ### 4.关于MQA和GQA为什么可以在某些方面超过MHA
 - 论文中说MHA中的多个K、V可能存在大量信息冗余。
@@ -435,6 +436,79 @@ class MultiQueryAttention(nn.Module):
         )
 
         return self.out_proj(context), attn_weights, past_key_value
+
+
+class MultiheadAttention(nn.Module):
+    r"""
+    https://arxiv.org/abs/1706.03762
+    """
+    def __init__(self, word_size: int = 512, embed_dim: int = 64, n_head:int=8) -> None:
+        super().__init__()
+        self.n_head = n_head
+        self.embed_dim = embed_dim
+        self.dim_K = torch.tensor(embed_dim)
+        self.proj = nn.Parameter(torch.empty(embed_dim * n_head, embed_dim))
+        nn.init.xavier_uniform_(self.proj)
+        self.multihead = nn.ModuleList([
+            Attention(word_size, embed_dim) for _ in range(n_head)
+        ])
+
+    def forward(self, x: Tensor) -> Tensor:
+        Z_s = torch.cat([head(x) for head in self.multihead], dim=1)
+        Z = torch.matmul(Z_s, self.proj)
+        return Z
+
+
+class  MultiQueryAttention(Attention):
+    r"""
+    https://arxiv.org/pdf/1911.02150.pdf
+    """
+    def __init__(self, word_size: int = 512, embed_dim: int = 64, n_query:int=8) -> None:
+        super().__init__(word_size, embed_dim)
+        self.n_query = n_query
+        self.proj = nn.Parameter(torch.empty(embed_dim * n_query, embed_dim))
+        nn.init.xavier_normal_(self.proj)
+        delattr(self, 'query')
+        self.querys = nn.ModuleList([
+            nn.Linear(in_features=word_size, out_features=embed_dim, bias=True)
+            for _ in range(n_query)
+        ])
+        self.key = nn.Linear(in_features=word_size, out_features=embed_dim, bias=True)
+        self.value = nn.Linear(in_features=word_size, out_features=embed_dim, bias=True)
+
+    def forward(self, x: Tensor) -> Tensor:
+        K = self.key(x)
+        V = self.value(x)
+        Z_s = torch.cat([
+            self.self_attention(query(x), K, V) for query in self.querys
+        ], dim=1)
+        Z = torch.matmul(Z_s, self.proj)
+        return Z
+
+
+class  GroupedQueryAttention(Attention):
+    r"""
+    https://arxiv.org/pdf/2305.13245.pdf
+    """
+    def __init__(self, word_size: int = 512, embed_dim: int = 64,
+                 n_grouped: int = 4, n_query_each_group:int=2) -> None:
+        super().__init__(word_size, embed_dim)
+        delattr(self, 'query')
+        delattr(self, 'key')
+        delattr(self, 'value')
+
+        self.grouped = nn.ModuleList([
+            MultiQueryAttention(word_size, embed_dim, n_query=n_query_each_group)
+            for _ in range(n_grouped)
+        ])
+        # self.proj = nn.Parameter(torch.empty((..., ...), requires_grad=True))
+        self.proj = nn.Parameter(torch.empty(embed_dim * n_grouped, embed_dim))
+        nn.init.xavier_uniform_(self.proj)
+
+    def forward(self, x: Tensor) -> Tensor:
+        Z_s = torch.cat([head(x) for head in self.grouped], dim=1)
+        Z = torch.matmul(Z_s, self.proj)
+        return Z
   ```
 
 # 42. 推理优化技术 Flash Attention 的作用是什么？
