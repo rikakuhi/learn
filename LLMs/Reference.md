@@ -283,7 +283,7 @@ https://zhuanlan.zhihu.com/p/628438318
 
 - LLAMA：采用了Pre-Layer Normalization（前标准化）的结构，即先进行Layer Normalization，然后进行自注意力或前馈神经网络的计算。这种结构有助于提高模型的泛化能力和鲁棒性。
 
-# 41. MHA多头注意力和MQA多查询注意力的区别？
+# 41. MHA多头注意力和MQA多查询注意力以及GQA分组查询注意力的区别？
 ### 1.MHA(multi head attention)
 - transformer中最初始的做法。
 ### 2.MQA(multi query attention)
