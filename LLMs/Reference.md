@@ -456,11 +456,16 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 2. 训练RM模型：
 - 一般用预训练模型或者是sft之后的模型进行初始化（instructGPT中用的是sft之后的模型）
 - 具体做法是将GPT模型最后一层的softmax去掉，然后直接接一个线性层，将模型的结果投影为一个标量，这个标量就是分数。(因为句子长度不同，所以这个线性投影具体是怎么做的呢？)
+这里的解释(根据hf的trl代码)：首先将长度不同的样本统一填充到同一个长度，比如512，之后进行forward，得到最后的输出(通过一个线性层，直接将hidden_states投影到1维，即分数，维度变化：16,512,768->16,512,1)。然后根据前面的mask，取出每个样本的长度位置处的score，得到一个[16,1]的分数。
 - 数据集的构建，一个prompt多个答案，然后人工对这些答案进行排序。
 - 然后InstructGPT中的做法是，用一个rankLoss作为损失，一个prompt对应9个答案，然后一次将prompt和这9个答案分别传入model，之后随机取两个分数，然后损失函数的操作是最大化 高分数-低分数，相当于一次前向传播 是消耗了9个QA，然而损失计算的时候是，C(9,2)=36对损失。
+![Alt](assert/reward_loss.jpg#pic_center)
 3. PPO对sft之后的模型进行优化
 ![Alt](assert/PPO.jpg#pic_center)
-- 首先将prompt扔到sft模型（policy）中，得到一对QA，然后将这对QA扔到reward model中，然后将prompt扔到原本不需要优化的sft model和policy中，求一个KL散度(目的是防止随着多轮优化后，模型的输出和原本有很大差距，导致陷入局部最优)
+- 首先将prompt扔到sft模型（policy）中，得到一对QA，然后将这对QA扔到reward model中，然后将prompt扔到原本不需要优化的sft model和policy中，求一个KL散度(目的是防止随着多轮优化后，模型的输出和原本有很大差距，导致陷入局部最优。第三部分是从原始预训练数据中取一些数据扔到policy中进行训练。 ->InstructGPT中的操作) 
+- 这里强化学习和统计学习的区别就是：同一个x，当我的模型更新之后，输出的y就发生了变化，但是统计学习，无论怎样训练，同一个x对应的y永远是不变的。
+![Alt](assert/ppo_loss.jpg#pic_center)
 4. Anthropic/hh-rlhf数据集
-- harmless-base:同一个问题，一个是给出答案，另一个是拒绝回答
-- 
+- harmless-base:同一个问题，一个是希望的答案，另一个是有毒的答案。
+- helpful:更希望的答案，另一个是帮助性不大的答案。
+其实就是InstructGPT类似的套路，只不过一个question对应两个答案，包括reward的损失函数也是和InstructGPT中的一样。
