@@ -469,3 +469,10 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - harmless-base:同一个问题，一个是希望的答案，另一个是有毒的答案。
 - helpful:更希望的答案，另一个是帮助性不大的答案。
 其实就是InstructGPT类似的套路，只不过一个question对应两个答案，包括reward的损失函数也是和InstructGPT中的一样。
+
+# 47.Llama2中的训练策略
+- 首先reward model随着收集到的数据不断增多，reward model的数据也一直在更新。（这里是训练了两个reward model：safety 和 helpfulness）
+- 循环迭代：每次都让模型对需要训练的prompt产生N个答案，然后用reward model去计算分数，选择最好的那个座位标准答案。 这样就获取到了下一轮中的训练数据，即：prompt+标准答案。
+- 一共迭代了5轮，前三轮的数据都是完全来自上一轮，但是会有遗忘，因此后面几轮在sft的时候就会把前面几轮中最好的数据拿过来作为训练集，这样对模型的性能有很大提升。
+- 针对这个N也做了实验，N越大，可以获得更好的答案(reward model的分数会越高)。（同时温度系数也在改变，以获取更加多元化的数据）
+- 在PPO优化的时候，采用了safety reward model和helpfulness reward model相结合的方式，因为事先知道一条训练数据是否可能会出发安全的红线，因此先用safety reward model计算分数，设置0.15为阈值。
