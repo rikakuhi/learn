@@ -476,3 +476,7 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - 一共迭代了5轮，前三轮的数据都是完全来自上一轮，但是会有遗忘，因此后面几轮在sft的时候就会把前面几轮中最好的数据拿过来作为训练集，这样对模型的性能有很大提升。
 - 针对这个N也做了实验，N越大，可以获得更好的答案(reward model的分数会越高)。（同时温度系数也在改变，以获取更加多元化的数据）
 - 在PPO优化的时候，采用了safety reward model和helpfulness reward model相结合的方式，因为事先知道一条训练数据是否可能会出发安全的红线，因此先用safety reward model计算分数，设置0.15为阈值。
+
+# 48. zero-shot-CoT
+- 通过两次prompt，第一次是Q + Let's think step by step. 得到推理答案A1
+- 第二次是 Q + A1 + 获取答案的prompt，不同任务不太一样(The answer is ...)得到最终结果
