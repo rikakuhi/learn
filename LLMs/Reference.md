@@ -477,6 +477,29 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - 针对这个N也做了实验，N越大，可以获得更好的答案(reward model的分数会越高)。（同时温度系数也在改变，以获取更加多元化的数据）
 - 在PPO优化的时候，采用了safety reward model和helpfulness reward model相结合的方式，因为事先知道一条训练数据是否可能会出发安全的红线，因此先用safety reward model计算分数，设置0.15为阈值。
 
-# 48. zero-shot-CoT
+# 48. CoT (chain of thought)相关
+### 1.普通的CoT
+- 主要是通过在prompt中添加具体的CoT步骤，或者给出一些few shot从而引导model进行合理的分析，并得出正确答案。
+- 缺点：针对不同的任务，需要写不同的具体CoT以及example。
+
+### 2.zero-shot-CoT(Let's think step by step.)
 - 通过两次prompt，第一次是Q + Let's think step by step. 得到推理答案A1
 - 第二次是 Q + A1 + 获取答案的prompt，不同任务不太一样(The answer is ...)得到最终结果
+- 实验结果表明，这种效果最好，同时这套模版几乎使用所有的任务。
+- 这些推理任务一般是不能通过Scaling Law解决的。
+
+# 49. ReAct相关
+![Alt](assert/ReAct.png#pic_center)
+- ReAct是通过thought和act结合起来使的LLM完成对应的任务。上图中的几种不同的方法，论文中都一起做了实验，结果表明ReAct还是效果最好。
+- 优点：通过thought可以得出解决一个复杂问题的思路，同时可以得到下一步应该干什么，通过Act可以调用一些外部的API，从而补充模型所不知道的知识。
+- 对比CoT系列：
+    - CoT推理能力很强，但是很容易出现幻觉。
+    - ReAct本身的一个问题是，在Act的时候，检索的信息是错误的，那这样最终结果一般也都是错误的。
+    - ReAct本身的推理能力是弱于CoT的。
+- 论文中采用的做法是，通过手动标注一些thought + act的步骤，然后引导LLM根据这些人工标注好的label，去生成更多的训练数据，减少了人工标注的成本。
+- 同时设计了CoT和ReAct结合的方法，因为发现CoT可以激发出model的推理能力。
+    - 当ReAct没能够得到一个具体的答案的时候，转向CoT。
+    - 当采用了n次CoT，但是得到的相同答案个数没有超过n/2的，则转向ReAct。
+    - 这两种方法均比单独使用CoT或者是ReAct效果要好。
+- ReActfinetune后的效果是最好的。
+
