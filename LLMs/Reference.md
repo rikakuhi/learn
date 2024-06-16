@@ -508,4 +508,6 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 
 ## 2.利用一些其他tricks进行更长文本的拓展。
 
-
+# 51.Quantization
+## 1.GPTQ
+## 2.AWQ
