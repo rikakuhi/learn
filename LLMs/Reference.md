@@ -510,4 +510,9 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 
 # 51.Quantization
 ## 1.GPTQ
+是对OBQ的改进，这两个方法都是训练结束后，逐层进行量化，使得量化前后损失最少，具体的量化目标函数为：
+![Alt](assert/Q_function.png#pic_center)
+### 1.OBQ
+- OBQ独立处理每一层的w，一次量化一个权重，同时始终更新所有尚未量化的权重，以补偿量化单个权重所产生的误差。
+
 ## 2.AWQ
