@@ -529,5 +529,26 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
     - 2.没有进行激活量化
 ## 2.AWQ
 
-
-
+# 52.Flash Attention
+### 1.GPU中的结构
+![Alt](assert/flashattention1.png#pic_center)
+- 这是一个A100 GPU的显存结构，可以看到HBM容量很大，但带宽较低
+### 2.Attention算法的计算复杂度推导
+### 3.Attentin中计算方法
+- 线性变化，将输入序列进行尺寸变换，得到O、K、V三个矩阵， 若每个token的embedding维度是k，那么这一步的复杂度是O(n * k * 3d)
+- 计算相似度得分：通过Q与K求出相似度，得到一个n*n的相似度矩阵，计算复杂度为O(n * n * d), 另外softmax的复杂度也是O(n * n * d)。也就是说普通Attention的复杂度其实是和序列长度成平方的关系
+![Alt](assert/flashattention2.png#pic_center)
+- 大部分时间都花在了写入HBM和从HBM中读取数据。（类似于CPU中的寄存器和内存之间的关系）
+- 这样计算的最大问题是，每次操作都需要从HBM中把数据加载到GPU的SRAM中进行计算，计算结束后又需要将结果写入HBM，因此flashattention要做的就是避免这种数据之间的来回移动。
+### 4.flashattention的做法
+![Alt](assert/flashattention3.png#pic_center)
+- flash attention的核心是想分块计算，但是这样有一个最大的问题是softmax，需要知道当前这个元素所在的某一行的其他所有元素的情况下才可以计算，因此没有办法实现直接分块。
+- softmax的分块计算：
+    - 定理一：在计算softmax的时候， 是e的x-max(x)就是让每个元素x都减去他这一行中最大的数值，这样做是为了保持稳定，因为假设求(1,2,300)的softmax，这样会求一个e的300次方，这个数非常大，容易发生溢出，损失精度，如果都减去300，那这样就把最大的值限制在了e的一次方，这样计算起来精度更高。  -> 这样两种方法其实是等价的，只需要让分子分母同时乘以e的300次方，就得到和原来一样的式子了。
+    - 公式如下：这个是核心，可以用 [1,2,3,4]这个向量去分组验证。
+    ![Alt](assert/flashattention4.png#pic_center)
+- 根据上面图片中的公式，M表示SRAM的最大容量。 作者将Q、K、V以及最后的输出O，进行分块，每块占SRAM容量的1/4，另外分块计算softmax的时候，两个块之间合并，需要进行储存一个中间值，作者将这个中间值放到寄存器中。
+- 首先取指定大小的K、V块到SRAM中（外层循环），接着取Q、O到SRAM中(内层循环)，这样将SRAM的空间恰好占满。然后分别一次计算完这个小块的注意力以及softmax的结果，直接将结果输出到HBM中。 也就是分块计算一次性完成了从KQV->结果的输出，省略了中间多次读取、写入数据的麻烦。
+- 详细解释见 https://fancyerii.github.io/2023/10/23/flashattention/
+- Flash Attention的计算复杂度：假设一个块的大小为b，那一个块在计算过程中就是b * b * d的复杂度，因为有k个块，所以总的复杂度就是k * b * b * d。其中k * b = n，理想情况下，当k=b的时候，计算效率更高，为 n的1.5次方*d
+- 根据以上分析，Flash attention不仅降低了计算复杂度，同时减少了多次读取和写入HBM中的时间。
