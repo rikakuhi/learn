@@ -45,6 +45,10 @@ Stable Diffusion 总共包含三个主要的组件，其中每个组件都拥有
 而LLM之所以主要都用Decoder-only架构，除了训练效率和工程实现上的优势外，在理论上是因为Encoder的双向注意力会存在低秩问题，这可能会削弱模型表达能力，就生成任务而言，引入双向注意力并无实质好处。而Encoder-Decoder架构之所以能够在某些场景下表现更好，大概只是因为它多了一倍参数。所以，在同等参数量、同等推理成本下，Decoder-only架构就是最优选择了。
 
 - 这里encoder是低秩，但是decoder不是的解释：由于encoder部分没有mask，因此经过softmax之后，得到的就是一个普通的矩阵，而decoder由于加上了mask，最终得到的是一个下三角或者上三角矩阵，而且这个矩阵的对角线上都是整数，也就说明，这个矩阵一定是满秩的，因此可以避免低秩问题。反过来encoder那种就不能保证一定是满秩。
+### 1.decoder only结构的分类
+- Causal Language Model：这个就是decoder，采用单向注意力 + 模型每次只预测当前的一个单词。
+- Prefix Language Model (Prefix LM)：模型的输入是一个前缀提示，模型根据提示生成后续的文本，在前缀提示部分用双向注意力机制，但是在生成文本部分用单向注意力机制。
+- 读一下GLM的论文，属于prefix LM
 
 # 04. 如何缓解 LLMs 复读机问题
 ##  复读机出现的原因：
@@ -552,3 +556,26 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - 详细解释见 https://fancyerii.github.io/2023/10/23/flashattention/
 - Flash Attention的计算复杂度：假设一个块的大小为b，那一个块在计算过程中就是b * b * d的复杂度，因为有k个块，所以总的复杂度就是k * b * b * d。其中k * b = n，理想情况下，当k=b的时候，计算效率更高，为 n的1.5次方*d
 - 根据以上分析，Flash attention不仅降低了计算复杂度，同时减少了多次读取和写入HBM中的时间。
+
+# 53.attention中的参数量、计算量、中间激活、KV cache
+## 1.Attention的参数量
+- 假设embedding的长度为h，那么Attention共有 4h**2 + 4h
+- mlp一般是有两层，第一层升维度到4h，第二层降维度到h，共有8h**2 + 5h参数
+- 一个Decoder模块一般有12h**2 + 13h
+- 若采用绝对位置编码，不包含可训练的参数，若采用RoPE这种旋转位置编码，则会增加少量的训练参数
+## 2.显存占用
+![Alt](assert/Attention1.png#pic_center)
+## 3.FLOPs估计
+![Alt](assert/FLOPs1.png#pic_center)
+![Alt](assert/FLOPs2.png#pic_center)
+## 3.计算量与参数量之间的关联
+![Alt](assert/para_FLOPs.png#pic_center)
+## 4.中间激活值分析
+- (见https://zhuanlan.zhihu.com/p/624740065)
+## 5.Kv-Cache
+- 应用在推理过程中，因为LLM在推理过程中每次只推理出下一个词，然后再将目前所有推理出来的句子重新输入到LLM中，继续推理下一个词，这样会导致有大量的重复数据在进行计算，KV-Cache要做的就是把之前每一次的计算结果保留。
+- 具体流程：
+    - 首先将prompt进行输入到LLM中，然后再推理过程中保存model每一层的key states以及 value states，(就是input通过线性层得到的K和V)。
+    - 然后完成当前这次推理之后，得到一个新的词，然后让这个新的词输入到LLM中，仅计算这个词的key states和value states以及query states，然后取出上一步保存的其他k和v，将其concat到一起，然后计算注意力。计算完了之后，更新保存的key和value，就是把concat之后的key和value进行保存。
+    - 后面以此类推，直到输出停止的token为止。
+    - 这样就相当于每次只计算一个词的key和value。
