@@ -513,6 +513,29 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 ## 2.利用一些其他tricks进行更长文本的拓展。
 
 # 51.Quantization
+- 量化的概念：其实是将连续值转换为一组离散值。
+- 神经网络的量化：就是将一些原本是 1.23、-2.32的权重量化为1、-2（浮点数变为整型）。其实也满足上面的那种概念，只不过是将一些离散值量化的更加离散了。
+- 基于k-means的量化
+![Alt](assert/k-means-based-weight-quantization.png#pic_center)
+![Alt](assert/k-means-based-weight-quantization-train.png#pic_center)
+    - 相当于先对权重矩阵进行一个聚类，然后保存一个index矩阵，和一个codebook(这个是聚类的结果) （第一个图）
+    - 在训练或者是微调的时候，也是每一类中的梯度信息进行 sum 求和，然后去更新codebook。
+    - 这种方法只是存储的时候采用压缩，但是进行计算的时候都是用的float数据。
+
+- linear quantization
+![Alt](assert/linear-quantization0.png#pic_center)
+![Alt](assert/linear-quantization.png#pic_center)
+![Alt](assert/linear-quantization1.png#pic_center)
+![Alt](assert/linear-quantization2.png#pic_center)
+    - 为AWQ的前置知识，后续具体卷积的计算等推导，具体详见linear-quantization。
+- 数据类型介绍
+    - int类型：
+    ![Alt](assert/int.png#pic_center)
+    - float类型：
+        - float16
+        ![Alt](assert/float32.png#pic_center)
+        ![Alt](assert/float322.png#pic_center)
+
 ## 1.GPTQ
 是对OBQ的改进，这两个方法都是训练结束后，逐层进行量化，使得量化前后损失最少，具体的量化目标函数为：
 ![Alt](assert/Q_function.png#pic_center)
@@ -531,7 +554,23 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - 缺点：
     - 1.无法解决异常值的情况
     - 2.没有进行激活量化
+- 量化到int4 激活保持float16，因此是一种W4A6。
+- 在推理阶段，模型权重被动态的反量化回float16，并在该数据类型下进行实际的运算。
+
 ## 2.AWQ
+- 核心思想 1 : 模型中的所有参数对结果的影响并不是相同的，因此在量化的过程中，并不是对所有的参数进行量化，而是选择一部分保留float16的精度，其余的进行低比特量化。
+    - 作者做了实验，分别保留0.1%、1%、3%的参数为float16，采用了三种选取参数的方式如下： 
+        - 随机挑选
+        - 基于权重分布（保留哪些绝对值较大的权重）
+        - 基于激活值，这里的激活值其实就是Attention的输入，比如Q = Wq * X，其中X就是激活值
+    - 作者在操作过程中选取权重的时候，并没有逐个元素进行选取，而是将激活值对每一列求绝对值的平均值，然后保留平均值最大的那一列为float16，其余进行量化。
+    - 这种方法的缺点：由于保存的权重的数据类型不同，因此存储起来，包括后面写对应的算子，都很复杂，因此有了核心思想2。
+- 核心思想 2 : 
+
+## 3.RTN(Round-to-nearest，四舍五入到最近值)
+- 量化过程快速，但是通常会带来精度损失。
+
+
 
 # 52.Flash Attention
 ### 1.GPU中的结构
@@ -550,6 +589,7 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - softmax的分块计算：
     - 定理一：在计算softmax的时候， 是e的x-max(x)就是让每个元素x都减去他这一行中最大的数值，这样做是为了保持稳定，因为假设求(1,2,300)的softmax，这样会求一个e的300次方，这个数非常大，容易发生溢出，损失精度，如果都减去300，那这样就把最大的值限制在了e的一次方，这样计算起来精度更高。  -> 这样两种方法其实是等价的，只需要让分子分母同时乘以e的300次方，就得到和原来一样的式子了。
     - 公式如下：这个是核心，可以用 [1,2,3,4]这个向量去分组验证。
+    
     ![Alt](assert/flashattention4.png#pic_center)
 - 根据上面图片中的公式，M表示SRAM的最大容量。 作者将Q、K、V以及最后的输出O，进行分块，每块占SRAM容量的1/4，另外分块计算softmax的时候，两个块之间合并，需要进行储存一个中间值，作者将这个中间值放到寄存器中。
 - 首先取指定大小的K、V块到SRAM中（外层循环），接着取Q、O到SRAM中(内层循环)，这样将SRAM的空间恰好占满。然后分别一次计算完这个小块的注意力以及softmax的结果，直接将结果输出到HBM中。 也就是分块计算一次性完成了从KQV->结果的输出，省略了中间多次读取、写入数据的麻烦。
@@ -572,7 +612,7 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 ![Alt](assert/para_FLOPs.png#pic_center)
 ## 4.中间激活值分析
 - (见https://zhuanlan.zhihu.com/p/624740065)
-## 5.Kv-Cache
+## 5.Kv-Cache(有时又叫做增量式推理)
 - 应用在推理过程中，因为LLM在推理过程中每次只推理出下一个词，然后再将目前所有推理出来的句子重新输入到LLM中，继续推理下一个词，这样会导致有大量的重复数据在进行计算，KV-Cache要做的就是把之前每一次的计算结果保留。
 - 具体流程：
     - 首先将prompt进行输入到LLM中，然后再推理过程中保存model每一层的key states以及 value states，(就是input通过线性层得到的K和V)。
