@@ -144,6 +144,9 @@ self.to_out = nn.Linear(inner_dim, dim)
 # 11. 介绍transformer算法
 
 Transformer本身是一个典型的encoder-decoder模型，Encoder端和Decoder端均有6个Block，Encoder端的Block包括两个模块，多头self-attention模块以及一个前馈神经网络模块；Decoder端的Block包括三个模块，多头self-attention模块，多头Encoder-Decoder attention交互模块，以及一个前馈神经网络模块；需要注意：Encoder端和Decoder端中的每个模块都有残差层和Layer Normalization层。
+- 为什么要除以根号d：
+    - 一般当d很大的时候，向量的内积会变得很大(假设Q和K都是均值为0，方差为1的变量，那么Q转置*K之后得到的均值为0，方差为d，那么不同的key与同一个query计算出来的分数可能相差很大，有的远大于0有远小于0)，对应的softmax的梯度计算出来就会非常小(如果在计算softmax的时候，一个数特别大而其他的数不是很大，就导致这些计算出来的梯度几乎为0，只有一个梯度比较大)。
+    - 如果Q的转置*K之后，在除以根号d，将均值为0，方法为d的分布变为，均值为0，方差为1的分布了，就不存在许多梯度为0的情况了。
 
 # 14. 在大型语言模型 (llms) 中减少幻觉的策略有哪些？
 
