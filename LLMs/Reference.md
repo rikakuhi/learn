@@ -1,4 +1,5 @@
 # 01. 大模型常用微调方法LORA和Ptuning的原理
+### 1.LoRA
 LoRA这种微调的方法称为PEFT（参数高效微调）
 Lora方法的核心是在大型语言模型上对指定参数增加额外的低秩矩阵，也就是在原始PLM旁边增加一个旁路，做一个降维再升维的操作。并在模型训练过程中，固定PLM的参数，只训练降维矩阵A与升维矩阵B。
 
@@ -7,7 +8,16 @@ Ptuning方法的核心是使用可微的virtual token替换了原来的discrete 
 LoRA有两个主要参数，其中一个是r即矩阵降维降到的维度，另外一个是阿尔法，这个参数是对添加的旁路的梯度进行一个scale，其作用是当r维度变化的时候，梯度会发生变化，导致可能需要重新调整学习率，通过调整阿尔法就可以使得梯度变化保持同一个尺度，从而不用调整学习率。
 
 更详细请查阅[使用 LoRA（低阶适应）微调 LLM](https://zhuanlan.zhihu.com/p/672999750)
-
+### 2.QLoRA
+#### 分位数量化
+详细见：https://zhuanlan.zhihu.com/p/666234324
+- 思路是将输入数据进行量化的时候，我们希望k-bit的整数值出现的频率都是相等的，因此使用分位数量化，将张量分成大小相同的若干块，这样得到更加均匀的量化特征。
+- 对于4bit分位数量化，需要找到15个分位数，来将正态分布的面积平均分成16份。其中，两个分位数的中点就是对应的q
+- 对于均匀量化来说，是将-1,1之间均匀的分割开，如果我们需要量化的参数是均匀分布在-1,1之间的话，能够取得一个比较小的量化误差。
+QLoRA论文解读：https://readpaper.feishu.cn/docx/CrMGdSVPKow5d1x1XQMcJioRnQe
+- 第一个创新点:提出NF4数据类型
+- 第二个创新点：二重量化，每64个参数共享一个量化常数(Absmax 32bit)平均下来，相当于每个参数需要占据额外的量化空间0.5bit。因此，对这个32bit的量化常数进行FP8量化。
+- 创新点三：分页优化，当GPU显存不够的情况下，将一部分参数分到CPU上处理，避免出现OOM。
 
 # 02. 介绍一下stable diffusion的原理
 
@@ -518,26 +528,35 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 # 51.Quantization
 - 量化的概念：其实是将连续值转换为一组离散值。
 - 神经网络的量化：就是将一些原本是 1.23、-2.32的权重量化为1、-2（浮点数变为整型）。其实也满足上面的那种概念，只不过是将一些离散值量化的更加离散了。
-- 基于k-means的量化
+### 基于k-means的量化
 ![Alt](assert/k-means-based-weight-quantization.png#pic_center)
 ![Alt](assert/k-means-based-weight-quantization-train.png#pic_center)
     - 相当于先对权重矩阵进行一个聚类，然后保存一个index矩阵，和一个codebook(这个是聚类的结果) （第一个图）
     - 在训练或者是微调的时候，也是每一类中的梯度信息进行 sum 求和，然后去更新codebook。
     - 这种方法只是存储的时候采用压缩，但是进行计算的时候都是用的float数据。
 
-- linear quantization
+### linear quantization(零点量化zero-point quantization)
 ![Alt](assert/linear-quantization0.png#pic_center)
 ![Alt](assert/linear-quantization.png#pic_center)
 ![Alt](assert/linear-quantization1.png#pic_center)
 ![Alt](assert/linear-quantization2.png#pic_center)
     - 为AWQ的前置知识，后续具体卷积的计算等推导，具体详见linear-quantization。
-- 数据类型介绍
-    - int类型：
-    ![Alt](assert/int.png#pic_center)
-    - float类型：
-        - float16
-        ![Alt](assert/float32.png#pic_center)
-        ![Alt](assert/float322.png#pic_center)
+### 最大绝对值量化(absolute maximum quantization)
+![Alt](assert/absolute_maximum_quantization.jpg#pic_center)
+详细解释见：https://zhuanlan.zhihu.com/p/627436535
+- 当有一种情况的时候，会导致精度很低，就是假设原本的向量中有一个100的权重，这样计算出来之后，量化后的权重会有好几个0，因此会导致有很多的信息损失。一种简单的解决方式是，分块或者是按照列(行)来进行量化。但是随着模型参数量的不断变大，这种方式也就不好用了。
+- 解决方案：(混合精度，outliers这部分采用float16来计算，其余的进行量化计算)
+![Alt](assert/LLM.int8.jpg#pic_center)
+将outliers和常规的分开计算，分别以float16和int8/int4来计算。
+- 这些outliers分布也是有规律的，大多数都分布在所有sequence的同一个维度。
+- 以6.0作为一个阈值，找出所有至少包含一个outlier的维度，然后int8和float16分开进行计算。
+### 数据类型介绍
+- int类型：
+![Alt](assert/int.png#pic_center)
+- float类型：
+- float16
+![Alt](assert/float32.png#pic_center)
+![Alt](assert/float322.png#pic_center)
 
 ## 1.GPTQ
 是对OBQ的改进，这两个方法都是训练结束后，逐层进行量化，使得量化前后损失最少，具体的量化目标函数为：
