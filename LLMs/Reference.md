@@ -57,11 +57,27 @@ Stable Diffusion 总共包含三个主要的组件，其中每个组件都拥有
 
 - Encoder-Decoder：例如T5（Text-to-Text Transfer Transformer）可以用于多种自然语言处理任务，如文本分类、机器翻译、问答等。
 
-而LLM之所以主要都用Decoder-only架构，除了训练效率和工程实现上的优势外，在理论上是因为Encoder的双向注意力会存在低秩问题，这可能会削弱模型表达能力，就生成任务而言，引入双向注意力并无实质好处。而Encoder-Decoder架构之所以能够在某些场景下表现更好，大概只是因为它多了一倍参数。所以，在同等参数量、同等推理成本下，Decoder-only架构就是最优选择了。
+- 22年有一篇论文专门 https://proceedings.mlr.press/v162/wang22u/wang22u.pdf 做了实验，确实是causal decoder这种结构对于生成式的zero-shot效果最好。另外也有一些工作表明encoder-decoder的泛化能力更强。
+- 为何prefix没有被大规模采用呢？若前缀很短，那也就和decoder-only没有太大区别了，而且在训练的时候，面对各种不同的问题，很难找到一个合适长度的前缀。
+
+而LLM之所以主要都用Decoder-only架构，除了训练效率和工程实现上的优势外，在理论上是因为Encoder的双向注意力会存在低秩问题(苏剑林)，这可能会削弱模型表达能力，就生成任务而言，引入双向注意力并无实质好处。而Encoder-Decoder架构之所以能够在某些场景下表现更好，大概只是因为它多了一倍参数。所以，在同等参数量、同等推理成本下，Decoder-only架构就是最优选择了。
 
 - 这里encoder是低秩，但是decoder不是的解释：由于encoder部分没有mask，因此经过softmax之后，得到的就是一个普通的矩阵，而decoder由于加上了mask，最终得到的是一个下三角或者上三角矩阵，而且这个矩阵的对角线上都是整数，也就说明，这个矩阵一定是满秩的，因此可以避免低秩问题。反过来encoder那种就不能保证一定是满秩。
+
+另外还有人认为预训练难度的问题，decoder only结构获取到的信息相对于其他架构更少，因此学习难度更大，当模型尺度足够大的时候，数据足够多的时候，其上限会更高。
+
+效率问题：decoder only支持KV cache
+
+轨迹问题：openai率先采用了这种方式取得了比较不错的效果，自然不太愿意大幅修改架构。
+
+归纳偏置的角度：
+1. 归纳偏置（Inductive bias）就是先验知识的意思，从归纳偏置的角度来理解，decoder-only加入的人类先验知识更少，训练出来的模型泛化性会比较好，但是代价就是想要训练得到好的结果就需要使用更多的参数、更多的数据和更多的算力。而像Bert这种完形填空类的模型，通过加入人的先验知识把模型设计成这种结构，使得模型在某些特定的任务上表现的很好，导致模型的泛化性就会差一些。
+2. 同理，可以类比到CNN、RNN和Transformer架构上，CNN加入了局部连接、平移不变性等这些适用于图像数据的先验知识，RNN加入了门控单元、记忆单元等适用于时序数据的先验知识，Transformer则更加纯粹，并没有明确添加适用于某种任务的先验知识，所以在小规模训练数据的条件下，CNN、RNN的效果要优于Transformer，但是在大规模数据的条件下，Transformer带来的性能提升更大。
+3. 像transformer、decoder-only这种添加更少先验知识的方法，让模型基于大规模的数据自主去学习有用的特征，只要数据足够多，自动学到的特征应该就会比人工设计的好，所以性能和泛化效果都会提升，前提就是基于大规模的数据。
+
+
 ### 1.decoder only结构的分类
-- Causal Language Model：这个就是decoder，采用单向注意力 + 模型每次只预测当前的一个单词。
+- Causal Language Model：这个就是decoder，采用单向注意力 + 模型每次只预测当前的一个单词。 单项注意力是指在计算attention的时候，构建一个causal mask矩阵，上三角是-无穷，下三角是0。
 - Prefix Language Model (Prefix LM)：模型的输入是一个前缀提示，模型根据提示生成后续的文本，在前缀提示部分用双向注意力机制，但是在生成文本部分用单向注意力机制。
 - 读一下GLM的论文，属于prefix LM
 
@@ -255,6 +271,8 @@ Diffusion的缺点是在反向扩散过程中需要把完整尺寸的图片输�
 # 30. Instruction Tuning与Prompt tuning方法的区别？
 
 - Prompt tuning:针对每个任务，单独生成prompt模板（hard prompt or soft prompt），然后在每个任务上进行full-shot微调与评估，其中预训练模型参数是freeze的。Prompt是去激发语言模型的补全能力，比如给出上半句生成下半句、或者做完形填空，都还是像在做language model任务。（通过prompt来引导LLM完成相关的任务，并输出正确结果，并不需要sft）
+
+[prompt tuning](https://zhuanlan.zhihu.com/p/618871247)
 - Instruction Tuning：针对每个任务，单独生成instruction（hard token），通过在若干个full-shot任务上进行微调，然后在具体的任务上进行评估泛化能力（zero shot），其中预训练模型参数是unfreeze的。Instruction Tuning则是激发语言模型的理解能力，通过给出更明显的指令/指示，让模型去理解并做出正确的action。（对LLM进行sft）
 
 [Instruction Tuning](https://zhuanlan.zhihu.com/p/558286175)
