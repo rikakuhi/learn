@@ -533,6 +533,13 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - 实验结果表明，这种效果最好，同时这套模版几乎使用所有的任务。
 - 这些推理任务一般是不能通过Scaling Law解决的。
 
+### 3.Manual-CoT(https://arxiv.org/abs/2201.11903)
+- 用到了少样本学习，就是 在输入问题之前，手动设计一些问题和答案的样例(样例的答案给出中间的推理过程)，这些问题和答案都需要手动构造，所以叫做手动-CoT。
+- 需要人工根据不同的任务，进行不同的设计，需要一定的人工成本。
+
+### 4.Auto-CoT
+- 对于每一个采样的问题拼接上“Let's think step by step”（类似于 Zero-Shot-CoT ）输入到语言模型，让语言模型生成中间推理步骤和答案，然后把这些所有采样的问题以及语言模型生成的中间推理步骤和答案全部拼接在一起，构成少样本学习的样例，最后再拼接上需要求解的问题一起输入到语言模型中进行续写。
+
 # 49. ReAct相关
 ![Alt](assert/ReAct.png#pic_center)
 - ReAct是通过thought和act结合起来使的LLM完成对应的任务。上图中的几种不同的方法，论文中都一起做了实验，结果表明ReAct还是效果最好。
@@ -700,6 +707,9 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 - 比较大的时候，步数整体变少，波动也会比较小，因此有可能收敛比较慢。
 ## 4.现在主流的学习率调整方法
 显示warm_up线性增长，然后用cosine(学习率以余弦函数的方式周期变换)
+##  5.Llama3.1
+- 首先在不同的评估集上面用了好多的few-shot以及CoT，有一点取巧的方式。
+- 关于评估集： MMLU是一个多选题目，IFEval是一个查看模型是否按照指示操作的数据集。
 
 # 56. vllm原理 
 ### 1.当前存在的问题
@@ -761,13 +771,59 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 
 # 59.PreNorm与PostNorm的区别
 1.PostNorm在残差之后做Norm，对参数的正则化效果更好，进而导致模型的鲁棒性要好。
+- 容易证明，如果x的方差（二阶矩同理）为σ1的平方，而F(x)的方差为σ2的平方，x + F(x)的残差会变成 σ1的平方 + σ2的平方，也就说明残差会进一步被放大，如果此时后面加一个norm，会缩小方差。但是却会缩减残差连接的作用。
 2.PreNorm有一部分参数直接加到了后面，不需要对其进行正则化，也就是相当于前面的信息可以直接传递到后面，从而在训练过程中更容易优化。但是存在一个问题就是会很依赖残差层，相当于整体网络的深度变浅了。
 3.苏剑林：post-norm训练出来的效果要更好，pre-norm更容易训练，现在大多数主流的LLM用的大多数是pre-norm。
 4.还有就是能不能把norm放到attention的后面？答案是不太合理：因为这样导致经过attention之后的数值由于有norm，导致整体数值比较小，但是残差那一层没有经过norm，可能数值比较大，从而导致残差的信息占主导了，这样貌似不是很合理。(但是有一篇定会就是这样做的....)
 
-# 60.Dual Chunk Attention
+
+# 60.Toolformer(LLM可以调用各种API)
 
 
-# 61.prefix tuning
+# 61.Dual Chunk Attention
+将比较长的上下文进行分块处理，先分别计算每个块里面的注意力机制，然后再将每个块中所有token进行的feature计算一个平均值，之后计算所有块之间的相似度。
 
-# 62. p tuning
+# 62.prefix tuning
+
+# 63. p tuning
+
+# 64. MOE模型
+- 主要是将Transformer的FFN部分替换为MOE层，其中MOE包括一个门控网络和若干个专家。
+- 门控：其实就是将attention之后的hidden，做一个降维，降低到专家的个数(qwen
+2中的54B那个是有64个专家)，之后取softmax之后得到概率，然后通过top_k取出需要的专家(qwen2采用8)。为什么不是每次都选最优的专家呢？答案：因为在训练过程中是想让门控学习如何更有效的选择专家，所以一般不会单独只有一个专家。
+- 在训练过程中，如果不做特殊的处理，可能会聚焦几个特定的专家系统，从而使的网络更快的收敛，因此这里，需要设计一个辅助函数。
+- 辅助函数：
+![Alt](assert/MOE.png#pic_center)
+![Alt](assert/MOE1.png#pic_center)
+    - 最后将这个辅助函数加到最后的loss中。
+    - fi是一个batch中，被分到第i个export的数量。
+    - bi是把分到每个expert中的概率进行相加了，这里是可微的。
+    - 具体代码实现中，其实是对概率进行先取指数，之后求和，然后再求对数。目的是直接对这些值取对数是不稳定的，防止数值计算中的上溢或者下溢。
+    - 之后对这个进行平方，然后对整个批次中所有位置求平均值。
+```
+def load_balancing_loss_func(router_probs: torch.Tensor, expert_indices: torch.Tensor) -> float:
+    r"""
+    计算负载平衡损失函数。
+
+    负载平衡损失函数用于Switch Transformers中，旨在通过调整专家分配概率来实现负载平衡，以优化模型性能。
+
+    Args:
+        router_probs (torch.Tensor):
+            形状为 [batch_size, sequence_length, num_experts] 的输入概率张量，表示每个位置选择每个专家的概率。
+        expert_indices (torch.Tensor):
+            形状为 [batch_size, sequence_length] 的整数张量，表示每个位置选择的专家索引。
+
+    Returns:
+        float:
+            标量，表示计算得到的负载平衡损失值。
+    """
+    num_groups, tokens_per_group, _ = router_probs.shape
+    # 计算对数概率的和，对应于每个位置的专家选择概率
+    log_z = torch.logsumexp(router_probs, dim=-1)
+    # 计算负载平衡损失，以提高模型的稳定性
+    balancing_loss = log_z**2
+    # 返回平均负载平衡损失
+    return torch.sum(balancing_loss) / (num_groups * tokens_per_group) 这个函数 的作用
+```
+
+- 在推理或者训练的时候，MOE的共享层复制在所有的GPU上，而不同的专家放到不同的GPU上。
