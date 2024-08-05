@@ -26,13 +26,15 @@
 ![Alt](assert/tensor_parallel.png#pic_center)
 - 在计算attention的时候是在head那个维度进行拆分的。qttention的维度是[bs, num_head,seq_len, embedding]
 
+
 # 4.多进程之间的通信
 - 英伟达显卡无脑选用nccl(只适用于英伟达的显卡)。
 - MPI：可以实现GPU、CPU之间的多设备通信，但是需要单独编译。
 - GLOO：也是一种通信方式。
 ### 1.all reduce
-多GPU之间==点对点==通信的时候，是采用python的 recv / send实现的，是阻塞的。
+多GPU之间'点对点'通信的时候，是采用python的 recv / send实现的，是阻塞的。
 ![Alt](assert/parallel.png#pic_center)
+
 经过allreduce之后，所有的GPU拿到的都是T0+T1+T2+T3的和。
 若有一个没有计算完，会等待其运行结束之后，才会继续执行。
 
@@ -47,22 +49,35 @@
 
 # 5.automatic mixed precison
     默认是float32和float16混合精度
-一些需要比较高精度计算的时候，会采用32位，比如说：求一些softmax、loss(weight unpdate)等，一般还有loss scale，就是反向传播的时候，避免很多特别小的梯度变为0，因此乘以一个比较大的数，进行扩大一下。然后再进行更新的时候，在unscale回原来的值。
+    一般是在计算激活和前向传播的时候，用的是float16，但是在进行反向传播的时候，会转为float32
+- 假设一个模型的参数为x，那么存储模型的参数和梯度(float16)，需要 2x + 2x bytes。如果选用Adam优化器，那么会存储momentum + variance（float32）共 4x+4x，此时计算的时候参数也用的是float32，那么也就是需要4x，也就是这样计算的话，需要 16x。
+- 一些需要比较高精度计算的时候，会采用32位，比如说：求一些softmax、loss(weight unpdate)等，一般还有loss scale，就是反向传播的时候，避免很多特别小的梯度变为0，因此乘以一个比较大的数，进行扩大一下。然后再进行更新的时候，在unscale回原来的值。
 
 # 6.deepspeed框架 
 - 首先deepspeed支持 ==mpi==(跨节点通信的库，适用于集群上分布式训练)、==gloo==(高性能分布式训练框架，支持CPU或者GPU的分布式训练)、==nccl==(英伟达提供的GPU专用通信库，广泛用于GPU上的分布式训练，应该是不支持分布式训练)
 - Zero将模型参数分成三部分，gradient(反向传播过程中的梯度)，模型参数，优化器参数。
 - deepspeed采用的张量并行是在计算的时候，把其他卡上参数拿到同一张卡上，然后开始计算。从这个角度来说，deepspeed的计算都是在同一张卡上完成的，属于数据并行。
-- 本质上其实是数据并行，但是要做好异步计算的处理。
+- 本质上其实是数据并行，但是要做好异步计算的处理。在每次计算的时候，都会先通过通信，得到完整的权重以及激活值，然后进行计算。相对比之下，megatron是使用张量并行实现的。
 
 ### 1.Zero-0
 不使用切片技术，仅用DeepSpeed作为DDP。
 ### 2.Zero-1
-分割Optimizer states。优化器参数被划分到多个memory上，每个momoey上的进程只负责更新它自己那部分参数。减少了4倍的内存，通信容量与数据并行性相同
+- 分割Optimizer states。优化器参数被划分到多个memory上，每个momoey上的进程只负责更新它自己那部分参数。减少了4倍的内存，通信容量与数据并行性相同。
+- 为什么通信容量与数据并行相同（没有额外的通信开销）：因为如果是单纯的数据并行，也会将所有GPU上的分别对应的数据计算完了之后，会把梯度、以及对应的状态（momentum和variance）做一次all-reduce。而如果只把优化器的状态分别存储，也是进行了这样类似的一个通信。
 ### 3.Zero-2
-分割Optimizer States与Gradients。每个memory，只保留它分配到的optimizer state所对应的梯度。这很合理，因为梯度和Optimizer是紧密联系在一起的。只知道梯度，不知道Optimizer state，是没有办法优化模型参数的。
+- 分割Optimizer States与Gradients。每个memory，只保留它分配到的optimizer state所对应的梯度。这很合理，因为梯度和Optimizer是紧密联系在一起的。只知道梯度，不知道Optimizer state，是没有办法优化模型参数的。
+- 这个同样不会增加额外的通信开销。
 ### 4.Zero-3
-分割Optimizer States、Gradients与Parameters，或者说，不同的layer. ZeRO-3会在forward和backward的时候，自动将模型参数分配到多个memory。
+- 分割Optimizer States、Gradients与Parameters，或者说，不同的layer. ZeRO-3会在forward和backward的时候，自动将模型参数分配到多个memory。
+- 这个会增加一部分通信开销，因为在计算前向传播的时候，需要把模型参数从其他GPU上拿过来，进行计算。
+- 但是当层数很多的时候，也可以通过异步，来减缓这种通信开销造成的影响。（在计算前面层的时候，就提前把面层的参数拿过来）。
+- 通信开销增加了原来的0.5倍。
+
+### 5.ZeRO-R
+- 是将激活值也分到不同的GPU上进行存储，(原来megatron LM 这篇论文，是在每一个GPU上都保存一个激活值，目的是减少all-reduce的次数）。
+- 在计算的时候，先通过一次GPU之间的通讯，将不同GPU上的激活值拼成一个完整的输入，在进行后续的计算。
+### 6.buffer
+就是在发送的时候，每次都攒够一定的数据量之后，在进行发送。
 ### 5.ZeRO-Infinity
 ZeRO-3的拓展。允许通过使用 NVMe 固态硬盘扩展 GPU 和 CPU 内存来训练大型模型。ZeRO-Infinity 需要启用 ZeRO-3。
 ### 6.Zero-Offload
