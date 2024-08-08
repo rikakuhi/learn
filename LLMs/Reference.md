@@ -897,5 +897,8 @@ def analyze_string_decode_to_chinese(input_string):
 - 将词转换为input_ids，以及从input_ids转为正常的文字
 - 填充到同一个长度
 - 支持对话模版，将对话转为一些模版。
-- attention_mask
+- attention_mask，比如补齐的时候，就需要添加上attention mask
 - 可能会在词表中添加一些不同模型的特殊token
+- 截断，若超出最大长度，则对齐进行截断
+- 特殊符号处理（比如EOS、PAD等）
+- 在词表中添加一些新词。
