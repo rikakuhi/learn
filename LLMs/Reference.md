@@ -856,6 +856,27 @@ def load_balancing_loss_func(router_probs: torch.Tensor, expert_indices: torch.T
 - 多语言：先通过一个分类器，将不同种类的语言抓取出来，然后进行去重。同时也会去用之前的一些模型，对每种不同的语言进行数据的打分，找到更多的高质量的数据。
 - 通过实验进行不同种类的数据的一个混合，最终是50%是通用知识，25%是数学，17%是code，8%是多语言。
 # 66.分词相关知识
+- qwen2的词表看起来那么奇怪的原因是，首先将每个token转为对应的unicode码点(类似ASCIll)，之后进行一定调整，将其范围限制在0-255上，然后用bytes处理，转为二进制，再用uft-8编码，得到最后的中文。
+```python
+def analyze_string_decode_to_chinese(input_string):
+    print("原始字符串:", input_string)
+
+    unicode_points = [ord(char) for char in input_string]
+    print("Unicode 码点:", unicode_points)
+
+    decoded_points = [point - 162 if point > 255 else point for point in unicode_points]
+    print("调整后的码点:", decoded_points)
+
+    try:
+        # 将调整后的码点转换为字节
+        byte_array = bytes(decoded_points)
+        # 直接使用 UTF-8 解码转换为字符串
+        decoded_string = byte_array.decode('utf-8')
+        print("解码后的字符串:", decoded_string)
+    except Exception as e:
+        print("解码失败:", e)
+
+```
 ### 1.BPE
     其实就是找到一些词具有的共同前缀，比如说 love loved lovest这三个词之间有一定的关系，如果分别单独作为一个token，则不能体现出其之间的关系。
 - 核心是从字母开始(汉字则是从单个汉字好开始)，不断找词频最高、且连续的两个token合并，直到达到目标词数。
@@ -871,3 +892,10 @@ def load_balancing_loss_func(router_probs: torch.Tensor, expert_indices: torch.T
 - 优点：能够合成相对于更有意义的子词。
 ### 4.sentence piece
 - 将一个句子看成一个整体，在拆分成片段，没有保留天然的词语的概念，将空格也看成一种特殊字符来对待，然后进行BPE。
+# 67. Tokenizer的作用
+- 分词
+- 将词转换为input_ids，以及从input_ids转为正常的文字
+- 填充到同一个长度
+- 支持对话模版，将对话转为一些模版。
+- attention_mask
+- 可能会在词表中添加一些不同模型的特殊token
