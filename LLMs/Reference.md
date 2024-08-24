@@ -718,6 +718,23 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
     - 然后完成当前这次推理之后，得到一个新的词，然后让这个新的词输入到LLM中，仅计算这个词的key states和value states以及query states，然后取出上一步保存的其他k和v，将其concat到一起，然后计算注意力。计算完了之后，更新保存的key和value，就是把concat之后的key和value进行保存。
     - 后面以此类推，直到输出停止的token为止。
     - 这样就相当于每次只计算一个词的key和value。
+## 6.KV-cache压缩
+### 1.静态token压缩
+#### 1.Dense Attention
+    就是原本的attention计算公式。
+#### 2.window Attention
+    每次在计算attention的时候，只和之前在window范围内的token计算相似度。
+    但是这种方法可能降低了模型的效果，因为最初的token被完全丢弃了，而这些token也很重要。
+#### 3.sliding window attention
+    每次都计算当前window内所有的kv cache，这样会降低计算效率，但是模型效果会比之前好。
+#### 4.streamingLLM
+    计算当前window内的token和最初始的token计算相似度(也就是prompt部分)这样可以达到sliding window attention。
+### 2.动态token稀疏化
+#### 1.H2O
+    与window类似，同样维护一个固定长度的kv cache，但是在更新的时候，并不是简单抛弃最前面的token。
+    计算当前的相关性，丢弃相关性最差的token。最终效果优于 streamingLLM
+#### 2.工程上的优化
+    在一个request结束后，并不是立即释放，而是等待下一个request，判断有哪些重合的token，直接复用这些token。
 
 # 54. LLM的评价指标
 ### Perplexity(困惑度，简称ppl)
