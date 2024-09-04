@@ -517,6 +517,8 @@ Flash Attention 是一种高效的注意力机制实现，如共享张量核心�
 
 
 # 46. RLHF技术(Reinforcement Learning from Human Feedback)基于人类反馈的强化学习
+    on-policy：PPO，每次在更新的时候，都是采用当前策略生成的样本来进行训练的。
+    off-policy：DPO，在训练时的数据，并不来自当前策略产生的数据。
 ## 1.PPO
 1. 首先预训练一个LLM，InstructGPT在这个基础上又进行了sft，但是由于它的数据量不大，导致一个epoch之后，直接过拟合了，但是问题不大，因为后续还要用强化学习进行优化。
 2. 训练RM模型：
