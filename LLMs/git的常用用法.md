@@ -1,0 +1,10 @@
+- git add . - 添加文件到暂存区。
+- git commit - 将暂存区内容添加到仓库中。
+- git status -查看仓库当前的状态，显示有变更的文件。
+- git reset	- 回退版本。
+- git rm - 将文件从暂存区和工作区中删除。
+- git mv  - 移动或重命名工作区文件
+- git checkout  - 切换分支。
+- git suitch  - 切换分支。
+- git fetch - 从远程仓库拉下来一个, 新保存一个分支，不会影响当前的工作区
+- git pull  - 将远程拉下来，并与当前的进行合并。
