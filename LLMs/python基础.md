@@ -131,3 +131,24 @@ print(type(fib_generator(5)))
 
 # 10.鸭子类型
 不同的类，并没有继承同一个父类，但是他们都实现了相同的 某个方法，因此，某个函数 func(object): object.thing(),该函数可以调用任何实现了thing()方法的类，这就是鸭子类型。
+
+# 11.全局变量
+
+- global:
+```python
+global a
+a = 20
+
+def func():
+    global a  # 必须得声明这个是global才行，否则就会创建一个新的变量
+    a = 20
+```
+- nonlocal
+```python
+def func1():
+    a = 100
+
+    def func2():
+        nonlocal a  # 注意这里的nonlocal只可以用在函数嵌套中的内层函数中。
+        print(a)
+```
